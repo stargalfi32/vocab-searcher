@@ -9,6 +9,7 @@ app = Flask(__name__)
 
 # 下載 NLTK 所需的斷詞與詞性還原資料包
 nltk.download('punkt')
+nltk.download('punkt_tab')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 
@@ -20,12 +21,30 @@ def load_passages(folder_path):
 
     for file_name in os.listdir(folder_path):
         file_path = os.path.join(folder_path, file_name)
+        # 確保只處理檔案，忽略子資料夾（如隱藏的 .git 或其他資料夾）
+        if os.path.isdir(file_path):
+            continue
+            
         category = os.path.splitext(file_name)[0]
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                passage = line.strip()
-                if passage:  # 確保不是空行
-                    passages.append({'category': category, 'passage': passage})
+        
+        # 嘗試使用多種常見編碼讀取檔案，防止 UnicodeDecodeError
+        content = None
+        for enc in ['utf-8', 'big5', 'utf-16', 'gbk', 'utf-8-sig']:
+            try:
+                with open(file_path, 'r', encoding=enc) as f:
+                    content = f.read()
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+                
+        if content is None:
+            print(f"無法讀取檔案 {file_name}，編碼不支援。")
+            continue
+
+        for line in content.splitlines():
+            passage = line.strip()
+            if passage:  # 確保不是空行
+                passages.append({'category': category, 'passage': passage})
     return passages
 
 def clean_mcq(mcq):
@@ -143,5 +162,4 @@ def index():
     return render_template('index.html', selected_types=["學測", "指考"])  # 預設兩個都選
 
 if __name__ == '__main__':
-    # 預設本地運行
     app.run(debug=True)
