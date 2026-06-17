@@ -110,7 +110,7 @@ def pre_process_passages(folder_path):
         category = entry['category']
         text = entry['passage'].replace('\r\n', '\n')
         
-        # 先將文章切出一般段落的句子，便於之後將選擇題選項與題目句進行匹配還原
+        # 先將文章切出一般段落的句子
         mcqs_raw = mcq_pattern.findall(text)
         text_without_mcq = re.sub(mcq_pattern, '', text)
         paragraphs = re.split(r'\n\s*\n', text_without_mcq)
@@ -119,6 +119,19 @@ def pre_process_passages(folder_path):
             if para.strip():
                 sentences.extend([s.strip() for s in sent_tokenize(para) if s.strip()])
                 
+        # 效能優化：預先計算所有句子的 tokenized 單字、字根與詞根，避免在選擇題配對的巢狀迴圈中重覆計算
+        precomputed_sentences = []
+        for s in sentences:
+            s_words = [w.lower() for w in word_tokenize(s)]
+            s_stems = [stemmer.stem(w).lower() for w in s_words]
+            s_lemmas = [lemmatizer.lemmatize(w).lower() for w in s_words]
+            precomputed_sentences.append({
+                'text': s,
+                'words': s_words,
+                'stems': s_stems,
+                'lemmas': s_lemmas
+            })
+            
         # 1. 提取並處理選擇題 (MCQ)
         for mcq in mcqs_raw:
             question = mcq[0]
@@ -140,48 +153,64 @@ def pre_process_passages(folder_path):
                 blank_pattern = re.compile(
                     rf'(?:[＿_\[\(\u3010\u3014\u2014]|\s{{2,}}){q_num}(?:[＿_\]\)\u3011\u3015\u2014]|\s{{2,}}|[\.,;\?!\s]{{2,}})'
                 )
-                for s in sentences:
-                    if blank_pattern.search(s):
-                        matched_sentence = s
-                        reconstructed_sentence = s
+                for s_info in precomputed_sentences:
+                    if blank_pattern.search(s_info['text']):
+                        matched_sentence = s_info['text']
+                        reconstructed_sentence = s_info['text']
                         break
                         
                 # B. 備用方案：如果文章已經被填入了正確答案（無空格），比對選項單字（排除停用詞）
                 if not matched_sentence:
-                    for s in sentences:
-                        s_words = [w.lower() for w in word_tokenize(s)]
-                        s_stems = [stemmer.stem(w).lower() for w in s_words]
-                        s_lemmas = [lemmatizer.lemmatize(w).lower() for w in s_words]
-                        
-                        for opt in opt_words:
-                            opt_lower = opt.lower()
-                            if opt_lower in stop_words:
-                                continue
+                    # 效能優化：預先計算選項的特徵，避免在句子迴圈中重複運算
+                    opt_features = []
+                    for opt in opt_words:
+                        opt_lower = opt.lower()
+                        if opt_lower in stop_words:
+                            continue
+                        opt_words_list = word_tokenize(opt_lower)
+                        opt_features.append({
+                            'opt': opt,
+                            'opt_lower': opt_lower,
+                            'words_list': opt_words_list,
+                            'stem': stemmer.stem(opt_lower) if len(opt_words_list) == 1 else None,
+                            'lemma': lemmatizer.lemmatize(opt_lower) if len(opt_words_list) == 1 else None
+                        })
+                    
+                    if opt_features:
+                        for s_info in precomputed_sentences:
+                            s_text = s_info['text']
+                            s_words = s_info['words']
+                            s_stems = s_info['stems']
+                            s_lemmas = s_info['lemmas']
                             
-                            opt_words_list = word_tokenize(opt_lower)
-                            if len(opt_words_list) > 1:
-                                # 片語匹配
-                                if opt_lower in s.lower():
-                                    matched_sentence = s
-                                    reconstructed_sentence = re.sub(rf'\b{re.escape(opt)}\b', f"   {q_num}   ", s, flags=re.IGNORECASE)
-                                    break
-                            else:
-                                # 單字匹配
-                                opt_stem = stemmer.stem(opt_lower)
-                                opt_lemma = lemmatizer.lemmatize(opt_lower)
-                                if opt_lower in s_words or opt_stem in s_stems or opt_lemma in s_lemmas:
-                                    matched_word = None
-                                    for w in word_tokenize(s):
-                                        w_lower = w.lower()
-                                        if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem or lemmatizer.lemmatize(w_lower) == opt_lemma:
-                                            matched_word = w
-                                            break
-                                    if matched_word:
-                                        matched_sentence = s
-                                        reconstructed_sentence = re.sub(rf'\b{re.escape(matched_word)}\b', f"   {q_num}   ", s)
+                            for feat in opt_features:
+                                opt = feat['opt']
+                                opt_lower = feat['opt_lower']
+                                opt_words_list = feat['words_list']
+                                
+                                if len(opt_words_list) > 1:
+                                    # 片語匹配
+                                    if opt_lower in s_text.lower():
+                                        matched_sentence = s_text
+                                        reconstructed_sentence = re.sub(rf'\b{re.escape(opt)}\b', f"   {q_num}   ", s_text, flags=re.IGNORECASE)
                                         break
-                        if matched_sentence:
-                            break
+                                else:
+                                    # 單字匹配
+                                    opt_stem = feat['stem']
+                                    opt_lemma = feat['lemma']
+                                    if opt_lower in s_words or opt_stem in s_stems or opt_lemma in s_lemmas:
+                                        matched_word = None
+                                        for w in word_tokenize(s_text):
+                                            w_lower = w.lower()
+                                            if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem or lemmatizer.lemmatize(w_lower) == opt_lemma:
+                                                matched_word = w
+                                                break
+                                        if matched_word:
+                                            matched_sentence = s_text
+                                            reconstructed_sentence = re.sub(rf'\b{re.escape(matched_word)}\b', f"   {q_num}   ", s_text)
+                                            break
+                            if matched_sentence:
+                                break
                             
                 # 若成功配對出題目句，將其與選項合併；否則只合併原本的題幹與選項
                 if reconstructed_sentence:
@@ -201,14 +230,13 @@ def pre_process_passages(folder_path):
             })
             
         # 2. 將文章非選擇題句本身也獨立加進來
-        for sentence in sentences:
-            words = word_tokenize(sentence)
+        for s_info in precomputed_sentences:
             processed.append({
-                'cleaned_text': sentence.strip(),
+                'cleaned_text': s_info['text'].strip(),
                 'category': category,
-                'words_lower': [w.lower() for w in words],
-                'stems': [stemmer.stem(w).lower() for w in words],
-                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+                'words_lower': s_info['words'],
+                'stems': s_info['stems'],
+                'lemmas': s_info['lemmas']
             })
             
     return processed
