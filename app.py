@@ -12,6 +12,8 @@ nltk.download('punkt')
 nltk.download('punkt_tab')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
+nltk.download('stopwords')
+from nltk.corpus import stopwords
 
 # 全域快取，避免重複進行磁碟讀取與 NLTK 斷詞運算
 PROCESSED_PASSAGES = None
@@ -100,20 +102,96 @@ def pre_process_passages(folder_path):
         re.DOTALL | re.IGNORECASE
     )
     
+    # 英文停用詞，用於配對選項單字時過濾常見虛詞，防止誤判
+    stop_words = set(stopwords.words('english'))
+    
     processed = []
     for entry in raw_passages:
         category = entry['category']
         text = entry['passage'].replace('\r\n', '\n')
         
+        # 先將文章切出一般段落的句子，便於之後將選擇題選項與題目句進行匹配還原
+        mcqs_raw = mcq_pattern.findall(text)
+        text_without_mcq = re.sub(mcq_pattern, '', text)
+        paragraphs = re.split(r'\n\s*\n', text_without_mcq)
+        sentences = []
+        for para in paragraphs:
+            if para.strip():
+                sentences.extend([s.strip() for s in sent_tokenize(para) if s.strip()])
+                
         # 1. 提取並處理選擇題 (MCQ)
-        mcqs = mcq_pattern.findall(text)
-        for mcq in mcqs:
+        for mcq in mcqs_raw:
             question = mcq[0]
             options = mcq[1]
-            # 合併題目與選項，中間以換行分隔，保持排版
-            combined_mcq = question.strip() + "\n" + options.strip()
-            words = word_tokenize(combined_mcq)
             
+            q_num_match = re.search(r'\d+', question)
+            if q_num_match:
+                q_num = q_num_match.group()
+                
+                # 解析出選項單字
+                opts = re.split(r'\s*(?:\([A-J]\)|（[A-J]）|[A-J]\.)\s*', options.strip())
+                opt_words = [o.strip() for o in opts if o.strip()]
+                
+                # 尋找原始題目句
+                matched_sentence = None
+                reconstructed_sentence = None
+                
+                # A. 優先使用題號空格比對，例如： "  30  ", " [30] ", " (30) "
+                blank_pattern = re.compile(
+                    rf'(?:[＿_\[\(\u3010\u3014\u2014]|\s{{2,}}){q_num}(?:[＿_\]\)\u3011\u3015\u2014]|\s{{2,}}|[\.,;\?!\s]{{2,}})'
+                )
+                for s in sentences:
+                    if blank_pattern.search(s):
+                        matched_sentence = s
+                        reconstructed_sentence = s
+                        break
+                        
+                # B. 備用方案：如果文章已經被填入了正確答案（無空格），比對選項單字（排除停用詞）
+                if not matched_sentence:
+                    for s in sentences:
+                        s_words = [w.lower() for w in word_tokenize(s)]
+                        s_stems = [stemmer.stem(w).lower() for w in s_words]
+                        s_lemmas = [lemmatizer.lemmatize(w).lower() for w in s_words]
+                        
+                        for opt in opt_words:
+                            opt_lower = opt.lower()
+                            if opt_lower in stop_words:
+                                continue
+                            
+                            opt_words_list = word_tokenize(opt_lower)
+                            if len(opt_words_list) > 1:
+                                # 片語匹配
+                                if opt_lower in s.lower():
+                                    matched_sentence = s
+                                    reconstructed_sentence = re.sub(rf'\b{re.escape(opt)}\b', f"   {q_num}   ", s, flags=re.IGNORECASE)
+                                    break
+                            else:
+                                # 單字匹配
+                                opt_stem = stemmer.stem(opt_lower)
+                                opt_lemma = lemmatizer.lemmatize(opt_lower)
+                                if opt_lower in s_words or opt_stem in s_stems or opt_lemma in s_lemmas:
+                                    matched_word = None
+                                    for w in word_tokenize(s):
+                                        w_lower = w.lower()
+                                        if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem or lemmatizer.lemmatize(w_lower) == opt_lemma:
+                                            matched_word = w
+                                            break
+                                    if matched_word:
+                                        matched_sentence = s
+                                        reconstructed_sentence = re.sub(rf'\b{re.escape(matched_word)}\b', f"   {q_num}   ", s)
+                                        break
+                        if matched_sentence:
+                            break
+                            
+                # 若成功配對出題目句，將其與選項合併；否則只合併原本的題幹與選項
+                if reconstructed_sentence:
+                    combined_mcq = reconstructed_sentence.strip() + "\n" + options.strip()
+                else:
+                    combined_mcq = question.strip() + "\n" + options.strip()
+            else:
+                combined_mcq = question.strip() + "\n" + options.strip()
+                
+            words = word_tokenize(combined_mcq)
             processed.append({
                 'cleaned_text': clean_mcq(combined_mcq),
                 'category': category,
@@ -122,23 +200,16 @@ def pre_process_passages(folder_path):
                 'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
             })
             
-        # 2. 移除選擇題後的其他文本，先按段落切分，再對各段落獨立做句子的斷詞 (防止無標點選項表格與後文段落被合併)
-        text_without_mcq = re.sub(mcq_pattern, '', text)
-        paragraphs = re.split(r'\n\s*\n', text_without_mcq)
-        for para in paragraphs:
-            if not para.strip():
-                continue
-            sentences = sent_tokenize(para)
-            for sentence in sentences:
-                words = word_tokenize(sentence)
-                
-                processed.append({
-                    'cleaned_text': sentence.strip(),
-                    'category': category,
-                    'words_lower': [w.lower() for w in words],
-                    'stems': [stemmer.stem(w).lower() for w in words],
-                    'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
-                })
+        # 2. 將文章非選擇題句本身也獨立加進來
+        for sentence in sentences:
+            words = word_tokenize(sentence)
+            processed.append({
+                'cleaned_text': sentence.strip(),
+                'category': category,
+                'words_lower': [w.lower() for w in words],
+                'stems': [stemmer.stem(w).lower() for w in words],
+                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+            })
             
     return processed
 
