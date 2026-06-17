@@ -44,14 +44,13 @@ def load_passages(folder_path):
             print(f"無法讀取檔案 {file_name}，編碼不支援。")
             continue
 
-        for line in content.splitlines():
-            passage = line.strip()
-            if passage:  # 確保不是空行
-                passages.append({'category': category, 'passage': passage})
+        # 直接讀取整份檔案的內容，不以行為單位拆分，以便跨行比對題目與選項
+        passages.append({'category': category, 'passage': content})
     return passages
 
 def clean_mcq(mcq):
-    return re.sub(r'^\d+\.\s*', '', mcq)
+    # 移除題號 (例如 "1. " 或 "12 ")
+    return re.sub(r'^\d+[\.\s]+', '', mcq)
 
 def highlight_word(text, word):
     stemmer = PorterStemmer()
@@ -63,6 +62,7 @@ def highlight_word(text, word):
             return f'<span class="highlight">{token}</span>'
         return token
 
+    # 只針對單字字元進行替換，防範 HTML 標籤損毀與基本 XSS 注入
     return re.sub(r'\w+', replacer, text)
 
 def sort_matches(matches):
@@ -89,30 +89,40 @@ def pre_process_passages(folder_path):
         
     stemmer = PorterStemmer()
     lemmatizer = WordNetLemmatizer()
-    mcq_pattern = re.compile(r'(\d+\.\s.*?)(\(A\).*?\(B\).*?\(C\).*?\(D\).*?)(?=\n|$)')
+    
+    # 嚴謹的選擇題正則表達式，支援跨行且防止跨題號過度匹配
+    mcq_pattern = re.compile(
+        r'(\b\d+[\.\s]+(?:(?!\n\s*\d+[\.\s]).)+?)'  # 題號與題幹 (Group 1)
+        r'(\(?A\)?[\s\.]+(?:(?!\n\s*\d+[\.\s]).)+?'  # 選項 A (Group 2)
+        r'\(?B\)?[\s\.]+(?:(?!\n\s*\d+[\.\s]).)+?'  # 選項 B
+        r'\(?C\)?[\s\.]+(?:(?!\n\s*\d+[\.\s]).)+?'  # 選項 C
+        r'\(?D\)?[\s\.]*[^\n]*)',                   # 選項 D
+        re.DOTALL | re.IGNORECASE
+    )
     
     processed = []
     for entry in raw_passages:
         category = entry['category']
-        text = entry['passage']
+        text = entry['passage'].replace('\r\n', '\n')
         
-        # 1. 處理選擇題 (MCQ)
+        # 1. 提取並處理選擇題 (MCQ)
         mcqs = mcq_pattern.findall(text)
         for mcq in mcqs:
             question = mcq[0]
             options = mcq[1]
-            combined_mcq = question + options
+            # 合併題目與選項，中間以換行分隔，保持排版
+            combined_mcq = question.strip() + "\n" + options.strip()
             words = word_tokenize(combined_mcq)
             
             processed.append({
-                'cleaned_text': clean_mcq(combined_mcq.strip()),
+                'cleaned_text': clean_mcq(combined_mcq),
                 'category': category,
                 'words_lower': [w.lower() for w in words],
                 'stems': [stemmer.stem(w).lower() for w in words],
                 'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
             })
             
-        # 2. 移除選擇題後的其他文本，用句子斷詞
+        # 2. 移除選擇題後的其他文本，做一般句子的斷詞 (如閱讀測驗文章)
         text_without_mcq = re.sub(mcq_pattern, '', text)
         sentences = sent_tokenize(text_without_mcq)
         for sentence in sentences:
@@ -171,7 +181,7 @@ def display_results(exact_matches, related_matches):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    # 每次請求時，確保至少初始化過快取
+    # 確保已載入快取
     get_processed_passages()
 
     if request.method == 'POST':
