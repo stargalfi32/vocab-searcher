@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>學測單字搜尋器</title>
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 40px auto;
+            background-color: #fff;
+            padding: 32px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        h1 {
+            text-align: center;
+            color: #244db6;
+            margin-bottom: 24px;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        input[type="text"] {
+            width: 80%;
+            max-width: 400px;
+            padding: 10px 14px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+        }
+
+        label[for="exam_type"] {
+            font-size: 14px;
+            color: #444;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #244db6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #1c3f9a;
+        }
+
+        h2 {
+            margin-top: 32px;
+            color: #555;
+            border-left: 4px solid #244db6;
+            padding-left: 12px;
+        }
+
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        li {
+            background-color: #f9f9f9;
+            margin: 8px 0;
+            padding: 12px;
+            border-left: 4px solid #ccc;
+            border-radius: 4px;
+        }
+
+        p {
+            color: #777;
+            font-size: 14px;
+        }
+
+        .highlight {
+            background-color: #fff3b0;
+        }
+
+        .error {
+            color: #c00;
+            text-align: center;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>學測單字搜尋器</h1>
+
+        <form method="post" action="/">
+            <label for="word">輸入你想查的單字：</label>
+            <input type="text" id="word" name="word" placeholder="例如：objective" value="{{ word or '' }}" required>
+
+            <div class="checkbox-group">
+                <label><input type="checkbox" name="exam_type" value="學測"
+                    {% if '學測' in selected_types %}checked{% endif %}> 學測</label>
+                <label><input type="checkbox" name="exam_type" value="指考"
+                    {% if '指考' in selected_types %}checked{% endif %}> 指考</label>
+            </div>
+
+            <button type="submit">搜尋</button>
+        </form>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        {% if exact_matches %}
+            <h2>包含 '{{ word }}' 的句子：</h2>
+            <ul>
+                {% for match in exact_matches %}
+                    <li>{{ match.sentence|safe }} <br><small>（{{ match.category }}）</small></li>
+                {% endfor %}
+            </ul>
+            <p>分類：{{ ', '.join(exact_categories) }}</p>
+        {% endif %}
+
+        {% if related_matches %}
+            <h2>其他相關結果：</h2>
+            <ul>
+                {% for match in related_matches %}
+                    <li>{{ match.sentence|safe }} <br><small>（{{ match.category }}）</small></li>
+                {% endfor %}
+            </ul>
+            <p>分類：{{ ', '.join(related_categories) }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>
