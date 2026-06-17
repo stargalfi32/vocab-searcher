@@ -91,11 +91,11 @@ def pre_process_passages(folder_path):
     
     # 嚴謹的選擇題正則表達式，支援跨行且防止跨題號過度匹配，限制題號必須位於行首或文章開頭
     mcq_pattern = re.compile(
-        r'(?:\A|(?<=\n))(\s*\d+[\.\s]+(?:(?!\n\s*\d+[\.\s]|\(?A\)|（A）|A\.).)*?)'  # 題號與題幹 (Group 1)
-        r'(\s*(?:\(A\)|（A）|A\.)(?:(?!\n\s*\d+[\.\s]|\(?B\)|（B）|B\.).)*?' # 選項 A (Group 2)
-        r'\s*(?:\(B\)|（B）|B\.)(?:(?!\n\s*\d+[\.\s]|\(?C\)|（C）|C\.).)*?' # 選項 B
-        r'\s*(?:\(C\)|（C）|C\.)(?:(?!\n\s*\d+[\.\s]|\(?D\)|（D）|D\.).)*?' # 選項 C
-        r'\s*(?:\(D\)|（D）|D\.)[^\n]*)',                               # 選項 D
+        r'(?:\A|(?<=\n))(\s*\d+[\.\s]+(?:(?!\n\s*\d+[\.\s]|\(A\)|（A）).)*?)'  # 題號與題幹 (Group 1)
+        r'(\s*(?:\(A\)|（A）)(?:(?!\n\s*\d+[\.\s]|\(B\)|（B）).)*?' # 選項 A (Group 2)
+        r'\s*(?:\(B\)|（B）)(?:(?!\n\s*\d+[\.\s]|\(C\)|（C）).)*?' # 選項 B
+        r'\s*(?:\(C\)|（C）)(?:(?!\n\s*\d+[\.\s]|\(D\)|（D）).)*?' # 選項 C
+        r'\s*(?:\(D\)|（D）)[^\n]*)',                               # 選項 D
         re.DOTALL | re.IGNORECASE
     )
     
@@ -136,73 +136,79 @@ def pre_process_passages(folder_path):
             if q_num_match:
                 q_num = q_num_match.group()
                 
-                # 解析出選項單字
-                opts = re.split(r'\s*(?:\([A-J]\)|（[A-J]）|[A-J]\.)\s*', options.strip())
+                # 解析出選項單字 (僅依據有括號的選項代號進行分割，防止將 B.C. 或 I. 等縮寫誤判為選項)
+                opts = re.split(r'\s*(?:\([A-J]\)|（[A-J]）)\s*', options.strip())
                 opt_words = [o.strip() for o in opts if o.strip()]
                 
                 # 尋找原始題目句
                 matched_sentence = None
                 reconstructed_sentence = None
                 
-                # A. 優先使用題號空格比對，例如： "  30  ", " [30] ", " (30) "
-                blank_pattern = re.compile(
-                    rf'(?:[＿_\[\(\u3010\u3014\u2014]|\s{{2,}}){q_num}(?:[＿_\]\)\u3011\u3015\u2014]|\s{{2,}}|[\.,;\?!\s]{{2,}})'
-                )
-                for s_info in precomputed_sentences:
-                    if blank_pattern.search(s_info['text']):
-                        matched_sentence = s_info['text']
-                        reconstructed_sentence = s_info['text']
-                        break
-                        
-                # B. 備用方案：如果文章已經被填入了正確答案（無空格），比對選項單字（排除停用詞）
-                if not matched_sentence:
-                    # 效能優化：預先計算選項的特徵，避免在句子迴圈中重複運算
-                    opt_features = []
-                    for opt in opt_words:
-                        opt_lower = opt.lower()
-                        if opt_lower in stop_words:
-                            continue
-                        opt_words_list = word_tokenize(opt_lower)
-                        opt_features.append({
-                            'opt': opt,
-                            'opt_lower': opt_lower,
-                            'words_list': opt_words_list,
-                            'stem': stemmer.stem(opt_lower) if len(opt_words_list) == 1 else None
-                        })
-                    
-                    if opt_features:
-                        for s_info in precomputed_sentences:
-                            s_text = s_info['text']
-                            s_words = s_info['words']
-                            s_stems = s_info['stems']
+                # 判斷是否為克漏字題：克漏字題的 question 只有題號，不包含英文字母
+                # 如果包含英文字母（如 "47. When did..."），則為閱讀測驗，不進行空格重構
+                question_text_only = re.sub(r'\d+[\.\s]*', '', question).strip()
+                is_cloze_question = not re.search(r'[a-zA-Z]', question_text_only)
+                
+                if is_cloze_question:
+                    # A. 優先使用題號空格比對，例如： "  30  ", " [30] ", " (30) "
+                    blank_pattern = re.compile(
+                        rf'(?:[＿_\[\(\u3010\u3014\u2014]|\s{{2,}}){q_num}(?:[＿_\]\)\u3011\u3015\u2014]|\s{{2,}}|[\.,;\?!\s]{{2,}})'
+                    )
+                    for s_info in precomputed_sentences:
+                        if blank_pattern.search(s_info['text']):
+                            matched_sentence = s_info['text']
+                            reconstructed_sentence = s_info['text']
+                            break
                             
-                            for feat in opt_features:
-                                opt = feat['opt']
-                                opt_lower = feat['opt_lower']
-                                opt_words_list = feat['words_list']
+                    # B. 備用方案：如果文章已經被填入了正確答案（無空格），比對選項單字（排除停用詞）
+                    if not matched_sentence:
+                        # 效能優化：預先計算選項的特徵，避免在句子迴圈中重複運算
+                        opt_features = []
+                        for opt in opt_words:
+                            opt_lower = opt.lower()
+                            if opt_lower in stop_words:
+                                continue
+                            opt_words_list = word_tokenize(opt_lower)
+                            opt_features.append({
+                                'opt': opt,
+                                'opt_lower': opt_lower,
+                                'words_list': opt_words_list,
+                                'stem': stemmer.stem(opt_lower) if len(opt_words_list) == 1 else None
+                            })
+                        
+                        if opt_features:
+                            for s_info in precomputed_sentences:
+                                s_text = s_info['text']
+                                s_words = s_info['words']
+                                s_stems = s_info['stems']
                                 
-                                if len(opt_words_list) > 1:
-                                    # 片語匹配
-                                    if opt_lower in s_text.lower():
-                                        matched_sentence = s_text
-                                        reconstructed_sentence = re.sub(rf'\b{re.escape(opt)}\b', f"   {q_num}   ", s_text, flags=re.IGNORECASE)
-                                        break
-                                else:
-                                    # 單字匹配
-                                    opt_stem = feat['stem']
-                                    if opt_lower in s_words or opt_stem in s_stems:
-                                        matched_word = None
-                                        for w in word_tokenize(s_text):
-                                            w_lower = w.lower()
-                                            if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem:
-                                                matched_word = w
-                                                break
-                                        if matched_word:
+                                for feat in opt_features:
+                                    opt = feat['opt']
+                                    opt_lower = feat['opt_lower']
+                                    opt_words_list = feat['words_list']
+                                    
+                                    if len(opt_words_list) > 1:
+                                        # 片語匹配
+                                        if opt_lower in s_text.lower():
                                             matched_sentence = s_text
-                                            reconstructed_sentence = re.sub(rf'\b{re.escape(matched_word)}\b', f"   {q_num}   ", s_text)
+                                            reconstructed_sentence = re.sub(rf'\b{re.escape(opt)}\b', f"   {q_num}   ", s_text, flags=re.IGNORECASE)
                                             break
-                            if matched_sentence:
-                                break
+                                    else:
+                                        # 單字匹配
+                                        opt_stem = feat['stem']
+                                        if opt_lower in s_words or opt_stem in s_stems:
+                                            matched_word = None
+                                            for w in word_tokenize(s_text):
+                                                w_lower = w.lower()
+                                                if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem:
+                                                    matched_word = w
+                                                    break
+                                            if matched_word:
+                                                matched_sentence = s_text
+                                                reconstructed_sentence = re.sub(rf'\b{re.escape(matched_word)}\b', f"   {q_num}   ", s_text)
+                                                break
+                                if matched_sentence:
+                                    break
                             
                 # 若成功配對出題目句，將其與選項合併；否則只合併原本的題幹與選項
                 if reconstructed_sentence:
