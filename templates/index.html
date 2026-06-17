@@ -135,7 +135,7 @@
                     <li>{{ match.sentence|safe }} <br><small>（{{ match.category }}）</small></li>
                 {% endfor %}
             </ul>
-            <p>分類：{{ ', '.join(exact_categories) }}</p>
+            <p>分類：{{ exact_categories | join(', ') }}</p>
         {% endif %}
 
         {% if related_matches %}
@@ -145,7 +145,7 @@
                     <li>{{ match.sentence|safe }} <br><small>（{{ match.category }}）</small></li>
                 {% endfor %}
             </ul>
-            <p>分類：{{ ', '.join(related_categories) }}</p>
+            <p>分類：{{ related_categories | join(', ') }}</p>
         {% endif %}
     </div>
 </body>

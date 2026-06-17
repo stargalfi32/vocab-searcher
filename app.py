@@ -10,6 +10,7 @@ app = Flask(__name__)
 # 下載 NLTK 所需的斷詞與詞性還原資料包
 nltk.download('punkt')
 nltk.download('wordnet')
+nltk.download('omw-1.4')
 
 def load_passages(folder_path):
     passages = []
