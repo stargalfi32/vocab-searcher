@@ -3,15 +3,13 @@ import os
 import re
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
-from nltk.stem import PorterStemmer, WordNetLemmatizer
+from nltk.stem import PorterStemmer
 
 app = Flask(__name__)
 
-# 下載 NLTK 所需的斷詞與詞性還原資料包
+# 下載 NLTK 所需的斷詞資料包與停用詞
 nltk.download('punkt')
 nltk.download('punkt_tab')
-nltk.download('wordnet')
-nltk.download('omw-1.4')
 nltk.download('stopwords')
 from nltk.corpus import stopwords
 
@@ -90,7 +88,6 @@ def pre_process_passages(folder_path):
         return []
         
     stemmer = PorterStemmer()
-    lemmatizer = WordNetLemmatizer()
     
     # 嚴謹的選擇題正則表達式，支援跨行且防止跨題號過度匹配，限制題號必須位於行首或文章開頭
     mcq_pattern = re.compile(
@@ -119,17 +116,15 @@ def pre_process_passages(folder_path):
             if para.strip():
                 sentences.extend([s.strip() for s in sent_tokenize(para) if s.strip()])
                 
-        # 效能優化：預先計算所有句子的 tokenized 單字、字根與詞根，避免在選擇題配對的巢狀迴圈中重覆計算
+        # 效能優化：預先計算所有句子的 tokenized 單字與字根，避免在選擇題配對的巢狀迴圈中重覆計算
         precomputed_sentences = []
         for s in sentences:
             s_words = [w.lower() for w in word_tokenize(s)]
             s_stems = [stemmer.stem(w).lower() for w in s_words]
-            s_lemmas = [lemmatizer.lemmatize(w).lower() for w in s_words]
             precomputed_sentences.append({
                 'text': s,
                 'words': s_words,
-                'stems': s_stems,
-                'lemmas': s_lemmas
+                'stems': s_stems
             })
             
         # 1. 提取並處理選擇題 (MCQ)
@@ -172,8 +167,7 @@ def pre_process_passages(folder_path):
                             'opt': opt,
                             'opt_lower': opt_lower,
                             'words_list': opt_words_list,
-                            'stem': stemmer.stem(opt_lower) if len(opt_words_list) == 1 else None,
-                            'lemma': lemmatizer.lemmatize(opt_lower) if len(opt_words_list) == 1 else None
+                            'stem': stemmer.stem(opt_lower) if len(opt_words_list) == 1 else None
                         })
                     
                     if opt_features:
@@ -181,7 +175,6 @@ def pre_process_passages(folder_path):
                             s_text = s_info['text']
                             s_words = s_info['words']
                             s_stems = s_info['stems']
-                            s_lemmas = s_info['lemmas']
                             
                             for feat in opt_features:
                                 opt = feat['opt']
@@ -197,12 +190,11 @@ def pre_process_passages(folder_path):
                                 else:
                                     # 單字匹配
                                     opt_stem = feat['stem']
-                                    opt_lemma = feat['lemma']
-                                    if opt_lower in s_words or opt_stem in s_stems or opt_lemma in s_lemmas:
+                                    if opt_lower in s_words or opt_stem in s_stems:
                                         matched_word = None
                                         for w in word_tokenize(s_text):
                                             w_lower = w.lower()
-                                            if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem or lemmatizer.lemmatize(w_lower) == opt_lemma:
+                                            if w_lower == opt_lower or stemmer.stem(w_lower) == opt_stem:
                                                 matched_word = w
                                                 break
                                         if matched_word:
@@ -225,8 +217,7 @@ def pre_process_passages(folder_path):
                 'cleaned_text': clean_mcq(combined_mcq),
                 'category': category,
                 'words_lower': [w.lower() for w in words],
-                'stems': [stemmer.stem(w).lower() for w in words],
-                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+                'stems': [stemmer.stem(w).lower() for w in words]
             })
             
         # 2. 將文章非選擇題句本身也獨立加進來
@@ -235,8 +226,7 @@ def pre_process_passages(folder_path):
                 'cleaned_text': s_info['text'].strip(),
                 'category': category,
                 'words_lower': s_info['words'],
-                'stems': s_info['stems'],
-                'lemmas': s_info['lemmas']
+                'stems': s_info['stems']
             })
             
     return processed
@@ -252,11 +242,9 @@ def search_sentences_optimized(word, selected_types):
     related_matches = []
     
     stemmer = PorterStemmer()
-    lemmatizer = WordNetLemmatizer()
     
     word_lower = word.lower()
     word_stem = stemmer.stem(word_lower)
-    word_lemma = lemmatizer.lemmatize(word_lower)
     
     passages = get_processed_passages()
     
@@ -270,8 +258,8 @@ def search_sentences_optimized(word, selected_types):
         if word_lower in item['words_lower']:
             highlighted = highlight_word(item['cleaned_text'], word)
             exact_matches.append({'sentence': highlighted, 'category': category})
-        # 相關匹配 (字根或原形相同)
-        elif word_stem in item['stems'] or word_lemma in item['lemmas']:
+        # 相關匹配 (字根相同)
+        elif word_stem in item['stems']:
             highlighted = highlight_word(item['cleaned_text'], word)
             related_matches.append({'sentence': highlighted, 'category': category})
             
