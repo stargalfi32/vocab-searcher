@@ -13,6 +13,9 @@ nltk.download('punkt_tab')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 
+# 全域快取，避免重複進行磁碟讀取與 NLTK 斷詞運算
+PROCESSED_PASSAGES = None
+
 def load_passages(folder_path):
     passages = []
     if not os.path.exists(folder_path):
@@ -79,65 +82,86 @@ def sort_categories(categories):
         return (exam_type, -num)
     return sorted(categories, key=sort_key)
 
-def search_sentences(passages, word, selected_types):
-    exact_matches = []
-    related_matches = []
+def pre_process_passages(folder_path):
+    raw_passages = load_passages(folder_path)
+    if raw_passages is None:
+        return []
+        
     stemmer = PorterStemmer()
     lemmatizer = WordNetLemmatizer()
-
-    word_lower = word.lower()
-    word_stem = stemmer.stem(word_lower)
-    word_lemma = lemmatizer.lemmatize(word_lower)
-
     mcq_pattern = re.compile(r'(\d+\.\s.*?)(\(A\).*?\(B\).*?\(C\).*?\(D\).*?)(?=\n|$)')
-
-    for entry in passages:
+    
+    processed = []
+    for entry in raw_passages:
         category = entry['category']
-        # 若使用者只選擇學測或指考，篩選分類
-        if not any(t in category for t in selected_types):
-            continue
-
         text = entry['passage']
+        
+        # 1. 處理選擇題 (MCQ)
         mcqs = mcq_pattern.findall(text)
-
         for mcq in mcqs:
             question = mcq[0]
             options = mcq[1]
             combined_mcq = question + options
             words = word_tokenize(combined_mcq)
-            words_lower = [w.lower() for w in words]
-
-            # 精確匹配
-            if word_lower in words_lower:
-                highlighted = highlight_word(clean_mcq(combined_mcq.strip()), word)
-                exact_matches.append({'sentence': highlighted, 'category': category})
-            else:
-                # 相關匹配
-                stems = [stemmer.stem(w).lower() for w in words]
-                lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
-                if word_stem in stems or word_lemma in lemmas:
-                    highlighted = highlight_word(clean_mcq(combined_mcq.strip()), word)
-                    related_matches.append({'sentence': highlighted, 'category': category})
-
-        text = re.sub(mcq_pattern, '', text)
-        sentences = sent_tokenize(text)
-
+            
+            processed.append({
+                'cleaned_text': clean_mcq(combined_mcq.strip()),
+                'category': category,
+                'words_lower': [w.lower() for w in words],
+                'stems': [stemmer.stem(w).lower() for w in words],
+                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+            })
+            
+        # 2. 移除選擇題後的其他文本，用句子斷詞
+        text_without_mcq = re.sub(mcq_pattern, '', text)
+        sentences = sent_tokenize(text_without_mcq)
         for sentence in sentences:
             words = word_tokenize(sentence)
-            words_lower = [w.lower() for w in words]
+            
+            processed.append({
+                'cleaned_text': sentence.strip(),
+                'category': category,
+                'words_lower': [w.lower() for w in words],
+                'stems': [stemmer.stem(w).lower() for w in words],
+                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+            })
+            
+    return processed
 
-            # 精確匹配
-            if word_lower in words_lower:
-                highlighted = highlight_word(sentence.strip(), word)
-                exact_matches.append({'sentence': highlighted, 'category': category})
-            else:
-                # 相關匹配
-                stems = [stemmer.stem(w).lower() for w in words]
-                lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
-                if word_stem in stems or word_lemma in lemmas:
-                    highlighted = highlight_word(sentence.strip(), word)
-                    related_matches.append({'sentence': highlighted, 'category': category})
+def get_processed_passages():
+    global PROCESSED_PASSAGES
+    if PROCESSED_PASSAGES is None:
+        PROCESSED_PASSAGES = pre_process_passages('passages')
+    return PROCESSED_PASSAGES
 
+def search_sentences_optimized(word, selected_types):
+    exact_matches = []
+    related_matches = []
+    
+    stemmer = PorterStemmer()
+    lemmatizer = WordNetLemmatizer()
+    
+    word_lower = word.lower()
+    word_stem = stemmer.stem(word_lower)
+    word_lemma = lemmatizer.lemmatize(word_lower)
+    
+    passages = get_processed_passages()
+    
+    for item in passages:
+        category = item['category']
+        # 若使用者只選擇學測或指考，篩選分類
+        if not any(t in category for t in selected_types):
+            continue
+            
+        # 精確匹配
+        if word_lower in item['words_lower']:
+            highlighted = highlight_word(item['cleaned_text'], word)
+            exact_matches.append({'sentence': highlighted, 'category': category})
+        # 相關匹配 (字根或原形相同)
+        elif word_stem in item['stems'] or word_lemma in item['lemmas']:
+            highlighted = highlight_word(item['cleaned_text'], word)
+            related_matches.append({'sentence': highlighted, 'category': category})
+            
     return sort_matches(exact_matches), sort_matches(related_matches)
 
 def display_results(exact_matches, related_matches):
@@ -147,6 +171,9 @@ def display_results(exact_matches, related_matches):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    # 每次請求時，確保至少初始化過快取
+    get_processed_passages()
+
     if request.method == 'POST':
         word = request.form['word']
         selected_types = request.form.getlist('exam_type')  # e.g., ["學測", "指考"]
@@ -157,11 +184,7 @@ def index():
         if not selected_types:
             return render_template('index.html', word=word, error="請至少選擇一個考試類型")
 
-        passages = load_passages('passages')
-        if passages is None:
-            return "Passages folder not found."
-
-        exact_matches, related_matches = search_sentences(passages, word, selected_types)
+        exact_matches, related_matches = search_sentences_optimized(word, selected_types)
         exact_categories, related_categories = display_results(exact_matches, related_matches)
 
         return render_template('index.html',
