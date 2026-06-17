@@ -85,6 +85,10 @@ def search_sentences(passages, word, selected_types):
     stemmer = PorterStemmer()
     lemmatizer = WordNetLemmatizer()
 
+    word_lower = word.lower()
+    word_stem = stemmer.stem(word_lower)
+    word_lemma = lemmatizer.lemmatize(word_lower)
+
     mcq_pattern = re.compile(r'(\d+\.\s.*?)(\(A\).*?\(B\).*?\(C\).*?\(D\).*?)(?=\n|$)')
 
     for entry in passages:
@@ -101,29 +105,38 @@ def search_sentences(passages, word, selected_types):
             options = mcq[1]
             combined_mcq = question + options
             words = word_tokenize(combined_mcq)
+            words_lower = [w.lower() for w in words]
 
-            stems = [stemmer.stem(w).lower() for w in words]
-            lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
-
-            highlighted = highlight_word(clean_mcq(combined_mcq.strip()), word)
-            if word.lower() in [w.lower() for w in words]:
+            # 精確匹配
+            if word_lower in words_lower:
+                highlighted = highlight_word(clean_mcq(combined_mcq.strip()), word)
                 exact_matches.append({'sentence': highlighted, 'category': category})
-            elif stemmer.stem(word.lower()) in stems or lemmatizer.lemmatize(word.lower()) in lemmas:
-                related_matches.append({'sentence': highlighted, 'category': category})
+            else:
+                # 相關匹配
+                stems = [stemmer.stem(w).lower() for w in words]
+                lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
+                if word_stem in stems or word_lemma in lemmas:
+                    highlighted = highlight_word(clean_mcq(combined_mcq.strip()), word)
+                    related_matches.append({'sentence': highlighted, 'category': category})
 
         text = re.sub(mcq_pattern, '', text)
         sentences = sent_tokenize(text)
 
         for sentence in sentences:
             words = word_tokenize(sentence)
-            stems = [stemmer.stem(w).lower() for w in words]
-            lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
+            words_lower = [w.lower() for w in words]
 
-            highlighted = highlight_word(sentence.strip(), word)
-            if word.lower() in [w.lower() for w in words]:
+            # 精確匹配
+            if word_lower in words_lower:
+                highlighted = highlight_word(sentence.strip(), word)
                 exact_matches.append({'sentence': highlighted, 'category': category})
-            elif stemmer.stem(word.lower()) in stems or lemmatizer.lemmatize(word.lower()) in lemmas:
-                related_matches.append({'sentence': highlighted, 'category': category})
+            else:
+                # 相關匹配
+                stems = [stemmer.stem(w).lower() for w in words]
+                lemmas = [lemmatizer.lemmatize(w).lower() for w in words]
+                if word_stem in stems or word_lemma in lemmas:
+                    highlighted = highlight_word(sentence.strip(), word)
+                    related_matches.append({'sentence': highlighted, 'category': category})
 
     return sort_matches(exact_matches), sort_matches(related_matches)
 
