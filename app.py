@@ -90,9 +90,9 @@ def pre_process_passages(folder_path):
     stemmer = PorterStemmer()
     lemmatizer = WordNetLemmatizer()
     
-    # 嚴謹的選擇題正則表達式，支援跨行且防止跨題號過度匹配
+    # 嚴謹的選擇題正則表達式，支援跨行且防止跨題號過度匹配，限制題號必須位於行首或文章開頭
     mcq_pattern = re.compile(
-        r'(\b\d+[\.\s]+(?:(?!\n\s*\d+[\.\s]|\(?A\)|（A）|A\.).)*?)'  # 題號與題幹 (Group 1)
+        r'(?:\A|(?<=\n))(\s*\d+[\.\s]+(?:(?!\n\s*\d+[\.\s]|\(?A\)|（A）|A\.).)*?)'  # 題號與題幹 (Group 1)
         r'(\s*(?:\(A\)|（A）|A\.)(?:(?!\n\s*\d+[\.\s]|\(?B\)|（B）|B\.).)*?' # 選項 A (Group 2)
         r'\s*(?:\(B\)|（B）|B\.)(?:(?!\n\s*\d+[\.\s]|\(?C\)|（C）|C\.).)*?' # 選項 B
         r'\s*(?:\(C\)|（C）|C\.)(?:(?!\n\s*\d+[\.\s]|\(?D\)|（D）|D\.).)*?' # 選項 C
@@ -122,19 +122,23 @@ def pre_process_passages(folder_path):
                 'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
             })
             
-        # 2. 移除選擇題後的其他文本，做一般句子的斷詞 (如閱讀測驗文章)
+        # 2. 移除選擇題後的其他文本，先按段落切分，再對各段落獨立做句子的斷詞 (防止無標點選項表格與後文段落被合併)
         text_without_mcq = re.sub(mcq_pattern, '', text)
-        sentences = sent_tokenize(text_without_mcq)
-        for sentence in sentences:
-            words = word_tokenize(sentence)
-            
-            processed.append({
-                'cleaned_text': sentence.strip(),
-                'category': category,
-                'words_lower': [w.lower() for w in words],
-                'stems': [stemmer.stem(w).lower() for w in words],
-                'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
-            })
+        paragraphs = re.split(r'\n\s*\n', text_without_mcq)
+        for para in paragraphs:
+            if not para.strip():
+                continue
+            sentences = sent_tokenize(para)
+            for sentence in sentences:
+                words = word_tokenize(sentence)
+                
+                processed.append({
+                    'cleaned_text': sentence.strip(),
+                    'category': category,
+                    'words_lower': [w.lower() for w in words],
+                    'stems': [stemmer.stem(w).lower() for w in words],
+                    'lemmas': [lemmatizer.lemmatize(w).lower() for w in words]
+                })
             
     return processed
 
